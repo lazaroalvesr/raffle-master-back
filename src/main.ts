@@ -14,7 +14,7 @@ async function bootstrap() {
 
   // Habilitar o CORS
   app.enableCors({
-    origin: 'https://raffle-master-back.vercel.app', // Substitua pela URL do front-end
+    origin: 'https://3028-168-227-214-5.ngrok-free.app', // Substitua pela URL do front-end
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Métodos HTTP permitidos
     credentials: true, // Permite envio de cookies com requisições
   });
