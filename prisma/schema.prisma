@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Rule {
+  ADM
+  USER
+}
+
+model User {
+  id                String    @id @default(uuid())
+  name              String
+  email             String    @unique
+  telephone         String
+  password          String
+  confirmationToken String?
+  recoverToken      String?
+  raffles           Raffle[]
+  tickets           Ticket[]
+  role              Rule      @default(USER)
+  Payment           Payment[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model Raffle {
+  id               String    @id @default(uuid())
+  name             String
+  description      String
+  image            String?
+  startDate        DateTime
+  endDate          DateTime
+  quantityNumbers  String
+  availableTickets String
+  ticketPrice      String
+  tickets          Ticket[]  @relation("RaffleTickets")
+  user             User      @relation(fields: [userId], references: [id])
+  userId           String
+  Payment          Payment[]
+
+  winnerTicketId String?
+  winnerTicket   Ticket? @relation("RaffleWinner", fields: [winnerTicketId], references: [id])
+}
+
+model Ticket {
+  id       String   @id @default(uuid())
+  number   Int
+  userId   String
+  raffleId String
+  user     User     @relation(fields: [userId], references: [id])
+  raffle   Raffle   @relation("RaffleTickets", fields: [raffleId], references: [id])
+  dateBuy  DateTime @default(now())
+
+  Raffle Raffle[] @relation("RaffleWinner")
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  transactionId String        @unique
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  raffleId      String
+  raffle        Raffle        @relation(fields: [raffleId], references: [id])
+  amount        Float
+  paymentMethod String
+  status        PaymentStatus
+  pixUrl        String
+  payerId       String?
+  payerEmail    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  ticketNumbers Int[]
+
+  @@index([userId, raffleId])
+  @@index([transactionId])
+}
+
+enum PaymentStatus {
+  pending
+  approved
+  rejectd
+  cancelled
+}
