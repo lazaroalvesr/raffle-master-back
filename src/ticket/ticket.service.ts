@@ -77,7 +77,7 @@ export class TicketService {
                     transaction_amount: priceTotal,
                     description: raffleTickPrice.description,
                     payment_method_id: "pix",
-                    notification_url: "https://aeb4-168-227-214-5.ngrok-free.app/notification",
+                    notification_url: "https://raffle-master-back.vercel.app/notification",
                     payer: {
                         email: body.email,
                     },
