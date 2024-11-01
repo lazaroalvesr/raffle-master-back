@@ -13,7 +13,7 @@ export class RaffleController {
     @UseGuards(AdminGuard)
     @UseInterceptors(FileInterceptor('image'))
     async create(@Body() body: CreateRaffleDTO, @UploadedFile() image: Express.Multer.File) {
-        return await this.raffleService.create(body, image);
+        return await this.raffleService.createRaffle(body, image);
     }
 
     @Public()

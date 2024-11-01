@@ -22,9 +22,6 @@ export class CreateRaffleDTO {
     quantityNumbers: string
 
     @IsNotEmpty()
-    availableTickets: string
-    
-    @IsNotEmpty()
     ticketPrice: string
 
     @IsNotEmpty()

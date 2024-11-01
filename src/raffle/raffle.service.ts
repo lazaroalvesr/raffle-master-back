@@ -7,28 +7,44 @@ import { supabase } from '../supabaseClient';
 export class RaffleService {
     constructor(private readonly prismaService: PrismaService) { }
 
-    async create(body: CreateRaffleDTO, image: Express.Multer.File) {
+    async createRaffle(body: CreateRaffleDTO, image: Express.Multer.File) {
         const imageUrl = await this.uploadImage(body.userId, image);
 
         if (!imageUrl) {
             throw new BadRequestException('Failed to upload image.');
         }
 
-        const response = await this.prismaService.raffle.create({
+
+        return this.prismaService.$transaction(async (prisma) => {
+          const raffle = await prisma.raffle.create({
             data: {
-                name: body.name,
-                description: body.description,
-                startDate: body.startDate,
-                endDate: body.endDate,
-                quantityNumbers: body.quantityNumbers,
-                availableTickets: body.availableTickets,
-                ticketPrice: body.ticketPrice,
-                image: imageUrl,
-                userId: body.userId,
-            }
+              name: body.name,
+              description: body.description,
+              startDate: body.startDate,
+              endDate: body.endDate,
+              quantityNumbers: body.quantityNumbers,
+              ticketPrice: body.ticketPrice,
+              image: imageUrl,
+              userId: body.userId,
+            },
+          });
+      
+          // Criar os bilhetes disponíveis em uma etapa separada
+          const availableTickets = [];
+          for (let i = 1; i <= parseInt(body.quantityNumbers); i++) {
+            availableTickets.push({
+              raffleId: raffle.id,
+              ticketNumber: i,
+            });
+          }
+      
+          await prisma.availableTicket.createMany({
+            data: availableTickets,
+          });
+      
+          return raffle;
         });
-        return response;
-    }
+      }
 
     private async uploadImage(id: string, profileImage: Express.Multer.File): Promise<string | null> {
         const uniqueFileName = `raffle${Date.now()}.png`;

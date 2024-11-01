@@ -30,22 +30,31 @@ model User {
 }
 
 model Raffle {
-  id               String    @id @default(uuid())
-  name             String
-  description      String
-  image            String?
-  startDate        DateTime
-  endDate          DateTime
-  quantityNumbers  String
-  availableTickets String
-  ticketPrice      String
-  tickets          Ticket[]  @relation("RaffleTickets")
-  user             User      @relation(fields: [userId], references: [id])
-  userId           String
-  Payment          Payment[]
+  id              String            @id @default(uuid())
+  name            String
+  description     String
+  image           String?
+  startDate       DateTime
+  endDate         DateTime
+  AvailableTicket AvailableTicket[] 
+  quantityNumbers String
+  ticketPrice     String
+  tickets         Ticket[]          @relation("RaffleTickets")
+  user            User              @relation(fields: [userId], references: [id])
+  userId          String
+  Payment         Payment[]
 
   winnerTicketId String?
   winnerTicket   Ticket? @relation("RaffleWinner", fields: [winnerTicketId], references: [id])
+}
+
+model AvailableTicket {
+  id           Int    @id @default(autoincrement())
+  raffleId     String @db.VarChar(255)
+  ticketNumber Int
+  raffle       Raffle @relation(fields: [raffleId], references: [id])
+
+  @@unique([raffleId, ticketNumber])
 }
 
 model Ticket {
