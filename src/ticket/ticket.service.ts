@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { CreateTicketDTO } from '../dto/ticket/CreateTicketDTO';
 import { PrismaService } from '../prisma/prisma.service';
 import { MercadoPagoConfig, Payment } from 'mercadopago';
-import { PaymentService } from 'src/payment/payment.service';
+import * as cron from 'node-cron';
 
 const ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
@@ -15,9 +15,43 @@ const payment = new Payment(client);
 export class TicketService {
     private readonly logger = new Logger(TicketService.name);
 
-    constructor(private prismaService: PrismaService, private paymentService: PaymentService) { }
+    constructor(private prismaService: PrismaService) { }
 
     async create(body: CreateTicketDTO): Promise<{ paymentDetails: any; generatedNumbers: number[] }> {
+
+        const getRandomAvailableTickets = async (
+            prisma: PrismaService,
+            raffleId: string,
+            quantity: number
+        ): Promise<number[]> => {
+            // Buscar todos os tickets disponíveis
+            const availableTickets = await prisma.availableTicket.findMany({
+                where: {
+                    raffleId: raffleId,
+                    isReserved: false,
+                    isPurchased: false,
+                },
+                select: {
+                    ticketNumber: true,
+                },
+            });
+
+            if (availableTickets.length < quantity) {
+                throw new Error('Não há tickets suficientes disponíveis');
+            }
+
+            // Embaralhar os tickets disponíveis (algoritmo Fisher-Yates)
+            const shuffledTickets = availableTickets.map(t => t.ticketNumber);
+            for (let i = shuffledTickets.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffledTickets[i], shuffledTickets[j]] = [shuffledTickets[j], shuffledTickets[i]];
+            }
+
+            // Pegar a quantidade solicitada de tickets
+            return shuffledTickets.slice(0, quantity);
+        };
+
+
         return this.prismaService.$transaction(async (prisma) => {
             const raffle = await prisma.raffle.findUnique({
                 where: { id: body.raffleId },
@@ -27,17 +61,22 @@ export class TicketService {
                     ticketPrice: true,
                     description: true,
                     AvailableTicket: {
+                        where: {
+                            isReserved: false,
+                            isPurchased: false
+                        },
                         select: { ticketNumber: true },
                     },
                 },
             });
 
+
+
             if (!raffle) {
                 throw new BadRequestException('Raffle not found.');
             }
 
-            const currentDate = new Date();
-            if (currentDate > raffle.endDate) {
+            if (new Date() > raffle.endDate) {
                 throw new BadRequestException('Raffle has ended. Tickets can no longer be purchased.');
             }
 
@@ -54,19 +93,8 @@ export class TicketService {
                 throw new BadRequestException('Not enough available tickets.');
             }
 
-
-            const raffleTickPrice = await this.prismaService.raffle.findFirst({
-                where: { id: body.raffleId },
-                select: {
-                    ticketPrice: true,
-                    description: true,
-                    quantityNumbers: true,
-                },
-            });
-
-
             const expirationDate = new Date();
-            expirationDate.setMinutes(expirationDate.getMinutes() + 30);
+            expirationDate.setMinutes(expirationDate.getMinutes() + 10);
             this.logger.log(`Payment expiration date: ${expirationDate.toISOString()}`);
 
             const generatedNumbers = raffle.AvailableTicket.slice(0, quantity).map((ticket) => ticket.ticketNumber);
@@ -74,24 +102,48 @@ export class TicketService {
             const uniqueIdempotencyKey = `key-${Date.now()}-${Math.random()}`;
             this.logger.log(`Idempotency key: ${uniqueIdempotencyKey}`);
 
+
             try {
-                const uniqueIdempotencyKey = `key-${Date.now()}-${Math.random()}`;
-                this.logger.log(`Idempotency key: ${uniqueIdempotencyKey}`);
+                // Gerar números aleatórios antes da transação principal
+                const generatedNumbers = await getRandomAvailableTickets(
+                    this.prismaService,
+                    body.raffleId,
+                    body.quantity
+                );
 
                 const result = await this.prismaService.$transaction(async (prisma) => {
-                    // 2. Remover números da lista de disponíveis (reservar)
-                    await prisma.availableTicket.deleteMany({
+                    // Verificar se os tickets ainda estão disponíveis
+                    const availableCount = await prisma.availableTicket.count({
                         where: {
                             raffleId: body.raffleId,
-                            ticketNumber: { in: generatedNumbers }
+                            ticketNumber: { in: generatedNumbers },
+                            isReserved: false,
+                            isPurchased: false
+                        }
+                    });
+
+                    if (availableCount !== generatedNumbers.length) {
+                        throw new Error('Alguns tickets selecionados já não estão mais disponíveis');
+                    }
+
+                    // Reservar os tickets temporariamente
+                    await prisma.availableTicket.updateMany({
+                        where: {
+                            raffleId: body.raffleId,
+                            ticketNumber: { in: generatedNumbers },
+                            isReserved: false,
+                            isPurchased: false
+                        },
+                        data: {
+                            isReserved: true,
                         },
                     });
 
-                    // 3. Criar pagamento
+                    // Criar pagamento
                     const paymentResponse = await payment.create({
                         body: {
                             transaction_amount: priceTotal,
-                            description: raffleTickPrice.description,
+                            description: raffle.description,
                             payment_method_id: "pix",
                             notification_url: "https://raffle-master-back.vercel.app/notification",
                             payer: {
@@ -104,7 +156,7 @@ export class TicketService {
 
                     const pixUrl = paymentResponse.point_of_interaction.transaction_data.ticket_url;
 
-                    // 4. Salvar pagamento
+                    // Salvar pagamento
                     const newPayment = await prisma.payment.create({
                         data: {
                             transactionId: String(paymentResponse.id),
@@ -120,37 +172,38 @@ export class TicketService {
                     });
 
                     return { paymentDetails: newPayment, generatedNumbers };
-                }, {
-                    maxWait: 10000,
-                    timeout: 10000
                 });
 
                 return result;
             } catch (error) {
-                // Em caso de erro, restaurar números para disponíveis
-                await this.prismaService.$transaction(async (prisma) => {
-                    await prisma.availableTicket.createMany({
-                        data: generatedNumbers.map(number => ({
-                            raffleId: body.raffleId,
-                            ticketNumber: number
-                        })),
-                        skipDuplicates: true
+                // Se algo der errado, liberar os tickets
+                if (generatedNumbers) {
+                    await this.prismaService.$transaction(async (prisma) => {
+                        await prisma.availableTicket.updateMany({
+                            where: {
+                                raffleId: body.raffleId,
+                                ticketNumber: { in: generatedNumbers }
+                            },
+                            data: {
+                                isReserved: false,
+                                reservedUntil: null
+                            },
+                        });
                     });
-
-                    throw error;
-                });
+                }
             }
         });
     }
 
+
     async handlePaymentApproved(paymentId: string) {
         await this.prismaService.$transaction(async (prisma) => {
-            // Buscar o pagamento
             const payment = await prisma.payment.findUnique({
                 where: { id: paymentId }
             });
 
-            // Criar tickets apenas quando o pagamento for aprovado
+            if (!payment) throw new BadRequestException('Payment not found.');
+
             await prisma.ticket.createMany({
                 data: payment.ticketNumbers.map((number) => ({
                     userId: payment.userId,
@@ -160,95 +213,54 @@ export class TicketService {
                 skipDuplicates: true,
             });
 
-            // Atualizar status do pagamento
             await prisma.payment.update({
                 where: { id: paymentId },
                 data: { status: 'approved' }
             });
+
+            await prisma.availableTicket.updateMany({
+                where: {
+                    raffleId: payment.raffleId,
+                    ticketNumber: { in: payment.ticketNumbers }
+                },
+                data: {
+                    isPurchased: true,
+                    isReserved: false,
+                    reservedUntil: null
+                },
+            });
         });
     }
 
-
-    // Método para retornar os tickets se o pagamento falhar (chamado pelo webhook)
     async handlePaymentNotApproved(paymentId: string) {
         await this.prismaService.$transaction(async (prisma) => {
-            // Buscar o pagamento
             const payment = await prisma.payment.findUnique({
-                where: { id: paymentId }
+                where: { id: paymentId },
+                select: { raffleId: true, ticketNumbers: true }
             });
 
-            // Restaurar números para disponíveis
-            await prisma.availableTicket.createMany({
-                data: payment.ticketNumbers.map(number => ({
+            if (!payment) throw new BadRequestException('Payment not found.');
+
+            await prisma.availableTicket.updateMany({
+                where: {
                     raffleId: payment.raffleId,
-                    ticketNumber: number
-                })),
-                skipDuplicates: true
+                    ticketNumber: { in: payment.ticketNumbers }
+                },
+                data: {
+                    isReserved: false,
+                    reservedUntil: null
+                },
             });
 
-            // Atualizar status do pagamento
             await prisma.payment.update({
                 where: { id: paymentId },
-                data: { status: 'cancelled' }
+                data: { status: 'cancelled' },
             });
         });
     }
 
-    async generateAndSaveTicketNumbers(
-        quantity: number,
-        raffleId: string,
-        maxNumber: number,
-        userId: string,
-    ): Promise<any> {
-        return this.prismaService.$transaction(async (tx) => {
-            const generatedNumbers = await this.generateUniqueRandomTicketNumbers(
-                quantity,
-                raffleId,
-                maxNumber,
-            );
-
-            const tickets = await tx.ticket.createMany({
-                data: generatedNumbers.map((number) => ({
-                    number,
-                    raffleId,
-                    userId,
-                })),
-            });
-
-            return tickets;
-        });
-    }
 
 
-
-    private async generateUniqueRandomTicketNumbers(
-        quantity: number,
-        raffleId: string,
-        maxNumber: number,
-    ): Promise<number[]> {
-        const existingTickets = await this.prismaService.ticket.findMany({
-            where: { raffleId },
-            select: { number: true },
-        });
-
-        const existingNumbers = new Set(existingTickets.map((ticket) => ticket.number));
-        const generatedNumbers = new Set<number>();
-
-        while (generatedNumbers.size < quantity) {
-            const randomNumber = Math.floor(Math.random() * maxNumber) + 1;
-            if (!existingNumbers.has(randomNumber)) {
-                generatedNumbers.add(randomNumber);
-            }
-        }
-
-        if (generatedNumbers.size < quantity) {
-            throw new BadRequestException(
-                'Not enough unique numbers available for tickets.',
-            );
-        }
-
-        return Array.from(generatedNumbers);
-    }
 
 
 
@@ -276,3 +288,5 @@ export class TicketService {
     }
 
 }
+
+

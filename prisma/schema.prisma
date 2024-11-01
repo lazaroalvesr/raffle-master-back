@@ -36,7 +36,7 @@ model Raffle {
   image           String?
   startDate       DateTime
   endDate         DateTime
-  AvailableTicket AvailableTicket[] 
+  AvailableTicket AvailableTicket[]
   quantityNumbers String
   ticketPrice     String
   tickets         Ticket[]          @relation("RaffleTickets")
@@ -49,10 +49,13 @@ model Raffle {
 }
 
 model AvailableTicket {
-  id           Int    @id @default(autoincrement())
-  raffleId     String @db.VarChar(255)
-  ticketNumber Int
-  raffle       Raffle @relation(fields: [raffleId], references: [id])
+  id            String    @id @default(uuid())
+  raffleId      String
+  ticketNumber  Int
+  isReserved    Boolean   @default(false)
+  reservedUntil DateTime?
+  isPurchased   Boolean   @default(false)
+  raffle        Raffle    @relation(fields: [raffleId], references: [id])
 
   @@unique([raffleId, ticketNumber])
 }

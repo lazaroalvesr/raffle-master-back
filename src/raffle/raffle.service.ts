@@ -6,45 +6,55 @@ import { supabase } from '../supabaseClient';
 @Injectable()
 export class RaffleService {
     constructor(private readonly prismaService: PrismaService) { }
-
     async createRaffle(body: CreateRaffleDTO, image: Express.Multer.File) {
         const imageUrl = await this.uploadImage(body.userId, image);
-
+    
         if (!imageUrl) {
             throw new BadRequestException('Failed to upload image.');
         }
-
-
+    
         return this.prismaService.$transaction(async (prisma) => {
-          const raffle = await prisma.raffle.create({
-            data: {
-              name: body.name,
-              description: body.description,
-              startDate: body.startDate,
-              endDate: body.endDate,
-              quantityNumbers: body.quantityNumbers,
-              ticketPrice: body.ticketPrice,
-              image: imageUrl,
-              userId: body.userId,
-            },
-          });
-      
-          // Criar os bilhetes disponíveis em uma etapa separada
-          const availableTickets = [];
-          for (let i = 1; i <= parseInt(body.quantityNumbers); i++) {
-            availableTickets.push({
-              raffleId: raffle.id,
-              ticketNumber: i,
+            const raffle = await prisma.raffle.create({
+                data: {
+                    name: body.name,
+                    description: body.description,
+                    startDate: body.startDate,
+                    endDate: body.endDate,
+                    quantityNumbers: body.quantityNumbers,
+                    ticketPrice: body.ticketPrice,
+                    image: imageUrl,
+                    userId: body.userId,
+                },
             });
-          }
-      
-          await prisma.availableTicket.createMany({
-            data: availableTickets,
-          });
-      
-          return raffle;
+    
+            const totalTickets = parseInt(body.quantityNumbers, 10);
+            if (isNaN(totalTickets) || totalTickets <= 0) {
+                throw new BadRequestException('Invalid quantity of tickets.');
+            }
+    
+            const batchSize = 100; // Tamanho do lote para a inserção
+            const availableTickets = [];
+    
+            for (let i = 1; i <= totalTickets; i++) {
+                availableTickets.push({
+                    raffleId: raffle.id,
+                    ticketNumber: i,
+                });
+    
+                // Insere um lote a cada 100 bilhetes
+                if (availableTickets.length === batchSize || i === totalTickets) {
+                    await prisma.availableTicket.createMany({
+                        data: availableTickets,
+                        skipDuplicates: true,
+                    });
+                    availableTickets.length = 0; // Limpa o array para o próximo lote
+                }
+            }
+    
+            return raffle;
         });
-      }
+    }
+    
 
     private async uploadImage(id: string, profileImage: Express.Multer.File): Promise<string | null> {
         const uniqueFileName = `raffle${Date.now()}.png`;
